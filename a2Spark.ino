@@ -8,7 +8,7 @@ Hardware connections
   P5: AN1
 */
 
-#define FIRMWARE_VERSION    (0x05)
+#define FIRMWARE_VERSION    (0x06)
 #define I2C_ADDRESS_DEVICE  (0x42)
 
 #include <TinyWireS.h>
@@ -29,7 +29,7 @@ Hardware connections
 //Average Analog Reg
 #define AVG1R       (0x05)
 #define AVG2R       (0x15)
-#define AG          (0xFF<<0)
+#define AG          (0x0F<<0)
 //Analog Data Reg
 #define AN1DRL      (0x06)
 #define AN2DRL      (0x16)
@@ -65,7 +65,10 @@ Hardware connections
 //Temperature Regs
 #define TCR         (0x10)
 #define TEN         (0x01<<0)
-#define C_FS        (0x01<<1)
+#define TUS         (0x03<<1)
+#define TUS_C       (0x00<<1)
+#define TUS_F       (0x01<<1)
+#define TUS_K       (0x01<<2)
 #define TDRL        (0x11)
 #define TDRH        (0x12)
 #define TP_L        (0xFF<<0)
@@ -101,7 +104,7 @@ Hardware connections
 #define AL2CVH_DEF  (AL1CVH_DEF)
 
 #define ANALOG_INPUT      (2)
-#define ANALOG_BUFF_SIZE  (256)
+#define ANALOG_BUFF_SIZE  (16)
 #define ANALOG_AN1_ADC    (0)
 #define ANALOG_AN2_ADC    (2)
 #define ALARM_AL1_PIN     (1)
@@ -366,7 +369,7 @@ void updateRegs()
   i2cRegs[AL2CVL] &= ALC_L;
   i2cRegs[AL1CVH] &= ALC_H;
   i2cRegs[AL2CVH] &= ALC_H;
-  i2cRegs[TCR]    &= (TEN | C_FS);
+  i2cRegs[TCR]    &= (TEN | TUS);
   i2cRegs[TDRL]   &= TP_L;
   i2cRegs[TDRH]   &= TP_H;
 }
@@ -497,31 +500,34 @@ void readTemperature()
   temperatureAcc += temperatureBuff[temperatureIndex];
   temperatureIndex ++;
   if (temperatureIndex >= temperatureBuffSize)  temperatureIndex = 0;
-  temperatureVal = temperatureAcc/temperatureBuffSize;
-  // convert kelvin to celsius
-  // (simplification of calculation)
-  // C = K - 273.15
-  // C = K - 273
-  if(!(i2cRegs[TCR] & C_FS))
+  temperatureVal = (int16_t)(temperatureAcc/temperatureBuffSize);
+  // Kelvin unit not selected
+  if(!(i2cRegs[TCR] & TUS_K))
   {
-    temperatureVal -= 273;
+    // convert kelvin to fahrenheit
+    // (simplification of calculation)
+    // F = 9/5*K - 459.67
+    // F = (9*K - 5*459.67)/5
+    // F = (9*K - 2298.35)/5
+    // F = (9*K - 2298)/5
+    if(i2cRegs[TCR] & TUS_F)
+    {
+      temperatureVal *= 9;
+      temperatureVal -= 2298;
+      temperatureVal /= 5;
+    }
+    // convert kelvin to celsius
+    // (simplification of calculation)
+    // C = K - 273.15
+    // C = K - 273
+    else
+    {
+      temperatureVal -= 273;
+    }
   }
-  // convert kelvin to fahrenheit
-  // (simplification of calculation)
-  // F = 9/5*K - 459.67
-  // F = (9*K - 5*459.67)/5
-  // F = (9*K - 2298.35)/5
-  // F = (9*K - 2298)/5
-  else
-  {
-    temperatureVal *= 9;
-    temperatureVal -= 2298;
-    temperatureVal /= 5;
-  }
-  
   // set the temperature data reg with the new value
-  i2cRegs[0x10] = temperatureVal & 0xFF;
-  i2cRegs[0x11] = (temperatureVal >> 8) & 0x03;
+  i2cRegs[TDRL] = temperatureVal & TP_L;
+  i2cRegs[TDRH] = (temperatureVal >> 8) & TP_H;
 }
 
 void setup()
