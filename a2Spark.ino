@@ -2,8 +2,8 @@
 *  Name:      a2Spark
 *  Author:    Alexandre Boni
 *  Created:   2013/10/26
-*  Modified:  2013/11/17
-*  Version:   0.7
+*  Modified:  2014/01/28
+*  Version:   0.8
 *  IDE:       Arduino 1.0.4 Digispark
 *  Hardware:  Digispark (ATtiny85)
 *
@@ -15,12 +15,15 @@
 *            P5: AN1
 *
 *  Release:
+*    0.8
+*          Adding temperature feature
+*          Adding Low-Pass filter
+*          Removing weighted average
+*          Adding reverse mode in alarm mode
 *    0.7
 *          Adding comments and layout
-*
 *    0.2 to 0.6
 *          First design of a2Spark
-*
 *    0.1
 *          Creation of this code.
 *
@@ -52,11 +55,18 @@
 *****************************************************************
 */
 // Current Firmware Version
-#define FIRMWARE_VERSION    (0x07)
+#define FIRMWARE_VERSION          (0x08)
 // I2C Address
 // this address should change to use more than one a2Spark device
 // address = [0x03 : 0x77]
-#define I2C_ADDRESS_DEVICE  (0x42)
+#define I2C_ADDRESS_DEVICE        (0x42)
+// Internal Temperature sensor
+// this temperature offset sensor is used to tune the Kelvin value
+// 0 <= TEMPERATURE_OFFSET <= 15
+#define TEMPERATURE_OFFSET        (4)
+// this bit sets the sign of TEMPERATURE_OFFSET
+// positive sign is 0, and negative sign is 1
+#define TEMPERATURE_OFFSET_SIGN   (0)
 
 /*
 *****************************************************************
@@ -72,11 +82,11 @@
 #define AN1CR                 (0x04)
 #define AN2CR                 (0x14)
 #define ANEN                  (0x01<<0)
-#define AVEN                  (0x01<<1)
+#define LPEN                  (0x01<<1)
 // Average Analog Register
-#define AVG1R                 (0x05)
-#define AVG2R                 (0x15)
-#define AG                    (0x0F<<0)
+#define LPF1R                 (0x05)
+#define LPF2R                 (0x15)
+#define LP                    (0x0F<<0)
 // Analog Data Register
 #define AN1DRL                (0x06)
 #define AN2DRL                (0x16)
@@ -89,12 +99,13 @@
 #define AL2CR                 (0x18)
 #define ALEN                  (0x01<<0)
 #define ALO                   (0x01<<1)
-#define ALM                   (0x07<<2)
-#define ALM_FE                (0x01<<0)
-#define ALM_RE                (0x01<<1)
+#define ALME                  (0x01<<4)
+#define ALM                   (0x07<<5)
+#define ALM_INV               (0x01<<5)
+#define ALM_FE                (0x01<<6)
+#define ALM_RE                (0x01<<7)
 #define ALM_DE                (ALM_RE | ALM_FE)
-#define ALM_LL                (0x01<<2)
-#define ALM_HL                (0x05<<0)
+#define ALM_L                 (0x03<<6)
 // Alarm Set Value Register
 #define AL1SVL                (0x09)
 #define AL2SVL                (0x19)
@@ -116,10 +127,14 @@
 #define TUS_C                 (0x00<<1)
 #define TUS_F                 (0x01<<1)
 #define TUS_K                 (0x01<<2)
+#define TSNG_SHIFT            (3)
+#define TSNG                  (0x01<<TSNG_SHIFT)
+#define TOS_SHIFT             (4)
+#define TOS                   (0x0F<<TOS_SHIFT)
 #define TDRL                  (0x11)
 #define TDRH                  (0x12)
 #define TP_L                  (0xFF<<0)
-#define TP_H                  (0x03<<0)
+#define TP_H                  (0xFF<<0)
 
 /*
 *****************************************************************
@@ -132,29 +147,31 @@
 #define ADDR_DEF              (I2C_ADDRESS_DEVICE)
 #define FWVR_DEF              (FIRMWARE_VERSION)
 // Analog1 & Alarm1 Registers
-#define AN1CR_DEF             (ANEN)
-#define AVG1R_DEF             (0x00)
+#define AN1CR_DEF             (ANEN | LPEN)
+#define LPF1R_DEF             (0x0F)
 #define AN1DRL_DEF            (0x00)
 #define AN1DRH_DEF            (0x00)
-#define AL1CR_DEF             (0x00)
-#define AL1SVL_DEF            (0x00)
-#define AL1SVH_DEF            (0x00)
-#define AL1CVL_DEF            (0x00)
-#define AL1CVH_DEF            (0x00)
+#define AL1CR_DEF             (ALEN | ALME | ALM_RE | ALM_INV)
+#define AL1SVL_DEF            (0xBC)
+#define AL1SVH_DEF            (0x02)
+#define AL1CVL_DEF            (0x20)
+#define AL1CVH_DEF            (0x03)
 // Temperature Registers
-#define TCR_DEF               (TEN | TUS_C)
+#define TOS_DEF               (TEMPERATURE_OFFSET<<TOS_SHIFT)
+#define TSGN_DEF              (TEMPERATURE_OFFSET_SIGN<<TSNG_SHIFT)
+#define TCR_DEF               (TEN | TUS_C | TSGN_DEF | TOS_DEF)
 #define TDRL_DEF              (0x00)
 #define TDRH_DEF              (0x00)
 // Analog1 & Alarm2 Registers
 #define AN2CR_DEF             (0x00)
-#define AVG2R_DEF             (AVG1R_DEF)
-#define AN2DRL_DEF            (AN1DRL_DEF)
-#define AN2DRH_DEF            (AN1DRH_DEF)
-#define AL2CR_DEF             (AL1CR_DEF)
-#define AL2SVL_DEF            (AL1SVL_DEF)
-#define AL2SVH_DEF            (AL1SVH_DEF)
-#define AL2CVL_DEF            (AL1CVL_DEF)
-#define AL2CVH_DEF            (AL1CVH_DEF)
+#define LPF2R_DEF             (0x00)
+#define AN2DRL_DEF            (0x00)
+#define AN2DRH_DEF            (0x00)
+#define AL2CR_DEF             (0x00)
+#define AL2SVL_DEF            (0x00)
+#define AL2SVH_DEF            (0x00)
+#define AL2CVL_DEF            (0x00)
+#define AL2CVH_DEF            (0x00)
 
 /*
 *****************************************************************
@@ -164,10 +181,6 @@
 // Number of Analog Input
 // = number of alarm output
 #define ANALOG_INPUT          (2)
-// Analog Averaging Buffer Size
-#define ANALOG_BUFF_SIZE      (16)
-// Temperature Buffer Size
-#define TEMPERATURE_BUFF_SIZE (20)
 // Analog1 Input Pin (AN0 = PB5)
 #define ANALOG_AN1_ADC        (0)
 // Analog2 Input Pin (AN2 = PB4)
@@ -176,16 +189,26 @@
 #define ALARM_AL1_PIN         (1)
 // Alarm2 Output Pin (PB3)
 #define ALARM_AL2_PIN         (3)
+// Low-Pass Temperature Filter
+// Parameter k
+#define TEMPERATURE_FILTER_K  (15)
 
 /*
 *****************************************************************
 ***                          Macro                            ***
 *****************************************************************
 */
-// Check if __n__ is between 0 and ANALOG_INPUT-1
+// check if __n__ is between 0 and ANALOG_INPUT-1
 // return a boolean
-#define SELECT_CHECK(__n__)  \
+#define SELECT_CHECK(__n__) \
         ((__n__ >= 0) && (__n__ < ANALOG_INPUT))
+
+// initialize the low-pass filter with the current
+// analog value
+// return an uint32_t
+#define LOWPASS_FILTER_INIT(__k__, __in__) \
+        (__in__ << __k__)
+        
 
 /*
 *****************************************************************
@@ -206,14 +229,8 @@
 */
 // Analog Value in ANnDRH:L 
 uint16_t analogVal[ANALOG_INPUT];
-// Analog Accumulator for Averaging process
-uint16_t analogAcc[ANALOG_INPUT];
-// Analog Index for Averaging process
-uint8_t  analogIndex[ANALOG_INPUT];
-// Analog Buffer Size selected by AVGnR.AG3:0
-uint8_t  analogBuffSize[ANALOG_INPUT];
-// Analog Buffer for Averaging process
-uint16_t analogBuff[ANALOG_INPUT][ANALOG_BUFF_SIZE];
+// Low-Pass Filter
+uint32_t lpFilter[ANALOG_INPUT];
 
 /*
 *****************************************************************
@@ -222,15 +239,9 @@ uint16_t analogBuff[ANALOG_INPUT][ANALOG_BUFF_SIZE];
 */
 // Temperature Value in TDRH:L
 // this value is signed
-int16_t  temperatureVal;
-// Temperature Accumulator for Averaging process
-uint16_t temperatureAcc;
-// Temperature Index for Averaging process
-uint8_t  temperatureIndex;
-// Temperature Buffer Size defined by TEMPERATURE_BUFF_SIZE
-uint8_t  temperatureBuffSize;
-// Temperature Buffer for Averaging process
-uint16_t temperatureBuff[TEMPERATURE_BUFF_SIZE];
+int16_t temperatureVal;
+// Low-Pass Filter for Temperature
+uint32_t temperatureFilter;
 
 /*
 *****************************************************************
@@ -256,7 +267,7 @@ volatile uint8_t i2cRegs[] =
   RESERVED,      //0x02
   RESERVED,      //0x03
   AN1CR_DEF,     //0x04
-  AVG1R_DEF,     //0x05
+  LPF1R_DEF,     //0x05
   AN1DRL_DEF,    //0x06
   AN1DRH_DEF,    //0x07
   AL1CR_DEF,     //0x08
@@ -272,7 +283,7 @@ volatile uint8_t i2cRegs[] =
   TDRH_DEF,      //0x12
   RESERVED,      //0x13
   AN2CR_DEF,     //0x14
-  AVG2R_DEF,     //0x15
+  LPF2R_DEF,     //0x15
   AN2DRL_DEF,    //0x16
   AN2DRH_DEF,    //0x17
   AL2CR_DEF,     //0x18
@@ -519,16 +530,16 @@ void updateRegs()
 {
   i2cRegs[ADDR]    = ADDR_DEF;
   i2cRegs[FWVR]    = FWVR_DEF;
-  i2cRegs[AN1CR]  &= (ANEN | AVEN);
-  i2cRegs[AN2CR]  &= (ANEN | AVEN);
-  i2cRegs[AVG1R]  &= AG;
-  i2cRegs[AVG2R]  &= AG;
+  i2cRegs[AN1CR]  &= (ANEN | LPEN);
+  i2cRegs[AN2CR]  &= (ANEN | LPEN);
+  i2cRegs[LPF1R]  &= LP;
+  i2cRegs[LPF2R]  &= LP;
   i2cRegs[AN1DRL] &= AN_L;
   i2cRegs[AN2DRL] &= AN_L;
   i2cRegs[AN1DRH] &= AN_H;
   i2cRegs[AN2DRH] &= AN_H;
-  i2cRegs[AL1CR]  &= (ALEN | ALO | ALM);
-  i2cRegs[AL2CR]  &= (ALEN | ALO | ALM);
+  i2cRegs[AL1CR]  &= (ALEN | ALO | ALM | ALME);
+  i2cRegs[AL2CR]  &= (ALEN | ALO | ALM | ALME);
   i2cRegs[AL1SVL] &= ALS_L;
   i2cRegs[AL2SVL] &= ALS_L;
   i2cRegs[AL1SVH] &= ALS_H;
@@ -537,7 +548,7 @@ void updateRegs()
   i2cRegs[AL2CVL] &= ALC_L;
   i2cRegs[AL1CVH] &= ALC_H;
   i2cRegs[AL2CVH] &= ALC_H;
-  i2cRegs[TCR]    &= (TEN | TUS);
+  i2cRegs[TCR]    &= (TEN | TUS | TSNG | TOS);
   i2cRegs[TDRL]   &= TP_L;
   i2cRegs[TDRH]   &= TP_H;
 }
@@ -559,39 +570,38 @@ void updateRegs()
 */
 void initSensor(uint8_t an)
 {
-  uint16_t j;
-  uint8_t tmpReg;
+  uint8_t tmpRegCR, tmpRegLP, tmpRegAN;
 
   // check if 'an' is between 0 and ANALOG_INPUT-1
   if(!SELECT_CHECK(an))  return;
   
-  // get the right average analog reg
-  if(an == 0)       tmpReg = AVG1R;
-  else if(an == 1)  tmpReg = AVG2R;
+  // get the right analog config reg, and average analog reg
+  if(an == 0)
+  {
+    tmpRegCR = AN1CR;
+    tmpRegLP = LPF1R;
+    tmpRegAN = ANALOG_AN1_ADC;
+  }
+  else if(an == 1)
+  {
+    tmpRegCR = AN2CR;
+    tmpRegLP = LPF2R;
+    tmpRegAN = ANALOG_AN2_ADC;
+  }
   
   // init analog variables
   analogVal[an]      = 0;
-  analogAcc[an]      = 0;
-  analogIndex[an]    = 0;
-  analogBuffSize[an] = (i2cRegs[tmpReg] & AG) + 1;
+  lpFilter[an]       = 0;
   
-  // init the analog buff
-  for(j=0; j<ANALOG_BUFF_SIZE; j++)
+  // init the LP filter if feature is enabled
+  if(i2cRegs[tmpRegCR] & LPEN)
   {
-    analogBuff[an][j] = 0;
+    lpFilter[an] = analogRead(tmpRegAN);
+    lpFilter[an] = LOWPASS_FILTER_INIT(
+                      (i2cRegs[tmpRegLP] & LP) + 1,
+                      lpFilter[an]
+                      );
   }
-  
-  // get the right analog config reg
-  if(an == 0)       tmpReg = AN1CR;
-  else if(an == 1)  tmpReg = AN2CR;
-  if(i2cRegs[tmpReg] & AVEN)
-  {
-    // init the analog averaging
-    for(j=0; j<analogBuffSize[an]; j++)
-    {
-      readSensor(an);
-    }
-  } 
 }
 
 /*
@@ -605,7 +615,7 @@ void initSensor(uint8_t an)
 */
 void initAlarm(uint8_t al)
 {
-  uint8_t tmpReg;
+  uint8_t tmpRegAL;
   
   // check if 'al' is between 0 and ANALOG_INPUT-1
   if(!SELECT_CHECK(al))  return;
@@ -615,10 +625,10 @@ void initAlarm(uint8_t al)
   updateAlarm(al);
   
   // get the right alarm output pin
-  if(al == 0)       tmpReg = ALARM_AL1_PIN;
-  else if(al == 1)  tmpReg = ALARM_AL2_PIN;
+  if(al == 0)       tmpRegAL = ALARM_AL1_PIN;
+  else if(al == 1)  tmpRegAL = ALARM_AL2_PIN;
   // set the alarm pin in output status
-  pinMode(tmpReg, OUTPUT);
+  pinMode(tmpRegAL, OUTPUT);
 }
 
 /*
@@ -631,21 +641,25 @@ void initAlarm(uint8_t al)
 */
 void initTemperature()
 {
-  uint16_t j;
-  
+  // init temperature variable
   temperatureVal      = 0;
-  temperatureAcc      = 0;
-  temperatureIndex    = 0;
-  temperatureBuffSize = TEMPERATURE_BUFF_SIZE;
+  temperatureFilter   = 0;
   
-  // check if the temperature sensor read is enabled
+  // check if the temperature sensor is enabled
   if(i2cRegs[TCR] & TEN)
   {
-    // init the temperature buffer
-    for(j=0; j<temperatureBuffSize; j++)
-    {
-      readTemperature();
-    }
+    // change the default analog reference for internal temperature
+    analogReference(INTERNAL1V1);
+    // capture a temperature sample
+    temperatureFilter = analogRead(A0+15);
+    // restore the default analog reference to VCC as reference
+    analogReference(DEFAULT);
+
+    // init the low-pass temperature filter
+    temperatureFilter  = LOWPASS_FILTER_INIT(
+                              TEMPERATURE_FILTER_K,
+                              temperatureFilter
+                              );
   } 
 }
 
@@ -654,6 +668,28 @@ void initTemperature()
 ***                 Sensor & Alarm Functions                  ***
 *****************************************************************
 */
+
+/*
+*****************************************************************
+*  Procedure:    lowPassFilter
+*  Description:  This function filters as a low-pass
+*                the input_value.
+*  Input:        Pointer on the filter buffer
+*                Parameter k (shift value)
+*                Analog input value
+*****************************************************************
+*/
+uint16_t unsignedLowPassFilter(
+  uint32_t  *filter,
+  uint8_t   k_shift,
+  uint16_t  input_value
+  )
+{
+  // update filter with current sample
+  *filter +=  input_value - (*filter >> k_shift);
+  // scale output for unity gain. 
+  return (*filter >> k_shift);
+}
 
 /*
 *****************************************************************
@@ -666,63 +702,66 @@ void initTemperature()
 */
 void readSensor(uint8_t an)
 {
+  static uint8_t currentShift[ANALOG_INPUT]  = {0};
+  static uint8_t previousShift[ANALOG_INPUT] = {0};
   uint8_t i;
-  uint8_t tmpBuffSize;
-  uint8_t tmpReg;
+  uint8_t tmpRegCR, tmpRegLP, tmpRegAN, tmpRegAD;
   
   // check if 'an' is between 0 and ANALOG_INPUT-1
   if(!SELECT_CHECK(an))  return;
   
-  // get the right analog config reg
-  if(an == 0)       tmpReg = AN1CR;
-  else if(an == 1)  tmpReg = AN2CR;
+  // get the right analog config reg, average analog reg,
+  // analog input, and analog data reg
+  if(an == 0)
+  {
+    tmpRegCR = AN1CR;
+    tmpRegLP = LPF1R;
+    tmpRegAN = ANALOG_AN1_ADC;
+    tmpRegAD = AN1DRL;
+  }
+  else if(an == 1)
+  {
+    tmpRegCR = AN2CR;
+    tmpRegLP = LPF2R;
+    tmpRegAN = ANALOG_AN2_ADC;
+    tmpRegAD = AN2DRL;
+  }
   
   // check if sampling is enabled
-  if( !(i2cRegs[tmpReg] & ANEN) )  return;
+  if( !(i2cRegs[tmpRegCR] & ANEN) )  return;
   
-  // check if averaging is enabled
-  if( !(i2cRegs[tmpReg] & AVEN) )
+  // check if filter is enabled
+  if( !(i2cRegs[tmpRegCR] & LPEN) )
   {
-    // get the right analog input
-    if(an == 0)       tmpReg = ANALOG_AN1_ADC;
-    else if(an == 1)  tmpReg = ANALOG_AN2_ADC;
-    // averging disabled then just capture one sample
-    analogVal[an] = analogRead(tmpReg);
+    // filter disabled then just capture one sample
+    analogVal[an] = analogRead(tmpRegAN);
   }
   else
-  {
-    // get the right average analog reg
-    if(an == 0)       tmpReg = AVG1R;
-    else if(an == 1)  tmpReg = AVG2R;
-    // save the last buffer size
-    tmpBuffSize = analogBuffSize[an];
-    // read the AVGnR register because averaging enabled
-    analogBuffSize[an] = (i2cRegs[tmpReg] & AG) + 1;
-    // get the right analog input
-    if(an == 0)       tmpReg = ANALOG_AN1_ADC;
-    else if(an == 1)  tmpReg = ANALOG_AN2_ADC;
-    // load the buffer with relevant values when the size is increased
-    if(analogBuffSize[an] > tmpBuffSize)
+  {    
+    // save the last k parameter (shift value)
+    previousShift[an] = currentShift[an];
+    // read the LPFnR register because LP filter enabled
+    currentShift[an] = (i2cRegs[tmpRegLP] & LP) + 1;
+    // re-initialize the LP filter if the k parameter change
+    if(currentShift[an] != previousShift[an])
     {
-      for(i=0; i<analogBuffSize[an]-tmpBuffSize; i++)
-        analogBuff[an][tmpBuffSize+i] = analogRead(tmpReg);
+      lpFilter[an] = analogRead(tmpRegAN);
+      lpFilter[an] = LOWPASS_FILTER_INIT(
+                        currentShift[an],
+                        lpFilter[an]
+                        );
     }
-    // smooth the analog value
-    analogAcc[an] = analogAcc[an] - analogBuff[an][analogIndex[an]];
-    analogBuff[an][analogIndex[an]] = analogRead(tmpReg);
-    analogAcc[an] = analogAcc[an] + analogBuff[an][analogIndex[an]];
-    analogIndex[an] ++;
-    if (analogIndex[an] >= analogBuffSize[an])  analogIndex[an] = 0;
-    analogVal[an] = analogAcc[an]/analogBuffSize[an];
+    // filter the current analog sample
+    analogVal[an] = unsignedLowPassFilter(
+                      &(lpFilter[an]),
+                      currentShift[an],
+                      analogRead(tmpRegAN)
+                      );
   }
   
-  // get the right analog data reg
-  if(an == 0)       tmpReg = AN1DRL;
-  else if(an == 1)  tmpReg = AN2DRL;
-  
   // set the analog data reg with the new value
-  i2cRegs[tmpReg]   = analogVal[an] & AN_L;
-  i2cRegs[tmpReg+1] = (analogVal[an] >> 8) & AN_H;
+  i2cRegs[tmpRegAD]   = analogVal[an] & AN_L;
+  i2cRegs[tmpRegAD+1] = (analogVal[an] >> 8) & AN_H;
 }
 
 /*
@@ -737,32 +776,39 @@ void readSensor(uint8_t an)
 */
 void checkAlarm(uint8_t al)
 {
-  uint8_t  tmpReg;
   uint16_t setValue;
   uint16_t clearValue;
+  uint8_t  tmpRegCR, tmpRegSV, tmpRegCV;
   
   // check if 'al' is between 0 and ANALOG_INPUT-1
   if(!SELECT_CHECK(al))  return;
   
-  // get the right alarm config reg
-  if(al == 0)       tmpReg = AL1CR;
-  else if(al == 1)  tmpReg = AL2CR;
+  // get the right alarm config reg, alarm set value reg,
+  // and alarm clear value reg
+  if(al == 0)
+  {
+    tmpRegCR = AL1CR;
+    tmpRegSV = AL1SVL;
+    tmpRegCV = AL1CVL;
+  }
+  else if(al == 1)
+  {
+    tmpRegCR = AL2CR;
+    tmpRegSV = AL2SVL;
+    tmpRegCV = AL2CVL;
+  }
   // check if alarm is enabled
-  if( !(i2cRegs[tmpReg] & ALEN) )
+  if( !(i2cRegs[tmpRegCR] & ALEN) )
   {
     alarmOutput[al] = 0;
     goto checkAlarm_updateALO;
   }
   
-  // get the right alarm set value reg
-  if(al == 0)       tmpReg = AL1SVL;
-  else if(al == 1)  tmpReg = AL2SVL;
-  setValue = ( (i2cRegs[tmpReg] & ALS_L) | ((i2cRegs[tmpReg+1] & ALS_H) << 8) );
+  // read the set value 
+  setValue = ( (i2cRegs[tmpRegSV] & ALS_L) | ((i2cRegs[tmpRegSV+1] & ALS_H) << 8) );
   
-  // get the right alarm clear value reg
-  if(al == 0)       tmpReg = AL1CVL;
-  else if(al == 1)  tmpReg = AL2CVL;
-  clearValue = ( (i2cRegs[tmpReg] & ALC_L) | ((i2cRegs[tmpReg+1] & ALC_H) << 8) );
+  // read the clear value 
+  clearValue = ( (i2cRegs[tmpRegCV] & ALC_L) | ((i2cRegs[tmpRegCV+1] & ALC_H) << 8) );
   
   // check the alarm status
   if(setValue > clearValue)
@@ -776,28 +822,24 @@ void checkAlarm(uint8_t al)
     else if(analogVal[al] > clearValue)  alarmOutput[al] = 0;
   }
   
-  // get the right alarm config reg
-  if(al == 0)       tmpReg = AL1CR;
-  else if(al == 1)  tmpReg = AL2CR;
-  
   // update ALnCR.ALO bit
   checkAlarm_updateALO:
-  if(alarmOutput[al]==0) i2cRegs[tmpReg] &= ~ALO;
-  else                   i2cRegs[tmpReg] |= ALO;
+  if(alarmOutput[al]==0) i2cRegs[tmpRegCR] &= ~ALO;
+  else                   i2cRegs[tmpRegCR] |= ALO;
 }
 
 /*
 *****************************************************************
 *  Procedure:    updateAlarm
 *  Description:  This function updates the digital alarm output
-*                according to the selected mode in ALnCR.ALM2:0
+*                according to the selected mode in ALnCR.ALM2:0,
 *                and the alarm state (ALnCR.ALO).
 *  Input:        Alarm channel. Shall be 0 or 1 for AL1 or AL2.
 *****************************************************************
 */
 void updateAlarm(uint8_t al)
 {
-  uint8_t tmpReg;
+  uint8_t tmpRegCR, tmpRegAL;
   uint8_t tmpMode;
   uint8_t tmpAlarm;
   // previous alarm state
@@ -806,55 +848,63 @@ void updateAlarm(uint8_t al)
   // check if 'al' is between 0 and ANALOG_INPUT-1
   if(!SELECT_CHECK(al))  return;
   
-  // get the right alarm config reg
-  if(al == 0)       tmpReg = AL1CR;
-  else if(al == 1)  tmpReg = AL2CR;
+  // get the right alarm config reg, and alarm output pin
+  if(al == 0)
+  {
+    tmpRegCR = AL1CR;
+    tmpRegAL = ALARM_AL1_PIN;
+  }
+  else if(al == 1)
+  {
+    tmpRegCR = AL2CR;
+    tmpRegAL = ALARM_AL2_PIN;
+  }
   
-  // get alarm mode
-  tmpMode = (i2cRegs[tmpReg] & ALM) >> 2;
+  // get alarm mode config
+  tmpMode = (i2cRegs[tmpRegCR] & ALM);
   
-  // check if alarm is enabled and mode valid
-  if( !(i2cRegs[tmpReg] & ALEN) || (tmpMode==0x0) )
+  // check if alarm is enabled and alarm mode enable
+  if( !(i2cRegs[tmpRegCR] & ALEN) || !(i2cRegs[tmpRegCR] & ALME) )
   {
     tmpAlarm = 0;
   }
-  // level mode
-  else if(tmpMode & ALM_LL)  // check ALM2
-  {
-    // mask to keep ALM2 and ALM0 only
-    tmpMode &= ALM_HL;
-    if(tmpMode == ALM_LL)       tmpAlarm = !alarmOutput[al];
-    else if(tmpMode == ALM_HL)  tmpAlarm = alarmOutput[al];
-    else                        tmpAlarm = 0;
-  }
-  // pulse mode
+  // alarm mode enable
   else
   {
-    if(outputState[al] != alarmOutput[al])
+    // level mode
+    if(!(tmpMode & ALM_L)) // ALM7:6={0,0}
     {
-      // falling edge
-      if(outputState[al] && !alarmOutput[al])
-      {
-        if(tmpMode == ALM_FE || tmpMode == ALM_DE) tmpAlarm = 1;
-        else tmpAlarm = 0;
-      }
-      // raising edge
-      else
-      {
-        if(tmpMode == ALM_RE || tmpMode == ALM_DE)  tmpAlarm = 1;
-        else tmpAlarm = 0;
-      }
+      tmpAlarm = alarmOutput[al];
     }
-    else tmpAlarm = 0;
+    // pulse mode
+    else
+    {
+      if(outputState[al] != alarmOutput[al])
+      {
+        // falling edge
+        if(outputState[al] && !alarmOutput[al])
+        {
+          if(tmpMode & ALM_FE) tmpAlarm = 1;
+          else tmpAlarm = 0;
+        }
+        // raising edge
+        else
+        {
+          if(tmpMode & ALM_RE)  tmpAlarm = 1;
+          else tmpAlarm = 0;
+        }
+      }
+      else tmpAlarm = 0;
+    }
+    // reverse bit
+    if(tmpMode & ALM_INV)  tmpAlarm = !tmpAlarm;
   }
   
   // save the current alarm state
   outputState[al] = alarmOutput[al];
-  // get the right alarm output pin
-  if(al == 0)       tmpReg = ALARM_AL1_PIN;
-  else if(al == 1)  tmpReg = ALARM_AL2_PIN;
+
   // update the output
-  digitalWrite(tmpReg, tmpAlarm);
+  digitalWrite(tmpRegAL, tmpAlarm);
 }
 
 /*
@@ -862,27 +912,41 @@ void updateAlarm(uint8_t al)
 *  Procedure:    readTemperature
 *  Description:  This function reads the internal temperature
 *                sensor. The raw value (temperature in kelvin)
-*                is smoothed with the TEMPERATURE_BUFF_SIZE
-*                previous values. Then TDRH:L is updated with
-*                the temperature value formatted according to the
-*                selected temperature unit in TCR.TUS1:0 (C, F, K).
+*                is smoothed with the low-pass filter configured
+*                with a parameter k equal to TEMPERATURE_FILTER_K.
+*                Then TDRH:L is updated with the temperature value
+*                formatted according to the selected temperature
+*                unit in TCR.TUS1:0 (C, F, K).
 *****************************************************************
 */
 void readTemperature()
 {
+  uint16_t  tmpTemp;
+  
   // check if temperature is enabled
   if(!(i2cRegs[TCR] & TEN))  return;
   
   // change the default analog reference for internal temperature
-  // this reference is reset to default after an analogRead()
+  // this reference should be reset to default before exiting the function
   analogReference(INTERNAL1V1);
-  // smooth the Kelvin temperature value
-  temperatureAcc -= temperatureBuff[temperatureIndex];
-  temperatureBuff[temperatureIndex] = analogRead(A0+15);
-  temperatureAcc += temperatureBuff[temperatureIndex];
-  temperatureIndex ++;
-  if (temperatureIndex >= temperatureBuffSize)  temperatureIndex = 0;
-  temperatureVal = (int16_t)(temperatureAcc/temperatureBuffSize);
+  // capture a temperature sample
+  tmpTemp = analogRead(A0+15);
+  // restore the default analog reference to VCC as reference
+  analogReference(DEFAULT);
+  
+  // filter with a low-pass the Kelvin temperature value
+  // then cast to signed integer
+  temperatureVal = unsignedLowPassFilter(
+                        (&temperatureFilter),
+                        TEMPERATURE_FILTER_K,
+                        tmpTemp
+                        );
+                        
+   if(i2cRegs[TCR] & TSNG)
+     temperatureVal -= ((i2cRegs[TCR] & TOS) >> TOS_SHIFT);
+   else
+     temperatureVal += ((i2cRegs[TCR] & TOS) >> TOS_SHIFT);   
+                                
   // Kelvin unit not selected
   if(!(i2cRegs[TCR] & TUS_K))
   {
@@ -907,6 +971,7 @@ void readTemperature()
       temperatureVal -= 273;
     }
   }
+  
   // update the temperature data reg with the new value
   i2cRegs[TDRL] = temperatureVal & TP_L;
   i2cRegs[TDRH] = (temperatureVal >> 8) & TP_H;
