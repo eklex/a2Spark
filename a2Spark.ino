@@ -2,8 +2,8 @@
 *  Name:      a2Spark
 *  Author:    Alexandre Boni
 *  Created:   2013/10/26
-*  Modified:  2014/01/28
-*  Version:   0.8
+*  Modified:  2014/04/20
+*  Version:   0.9
 *  IDE:       Arduino 1.0.4 Digispark
 *  Hardware:  Digispark (ATtiny85)
 *
@@ -15,6 +15,11 @@
 *            P5: AN1
 *
 *  Release:
+*    0.9
+*          Freeze current alarm output status
+*          when alarm is disbaled, and reset
+*          alarm output when alarm mode is disabled
+*          Correct alarm mode mask
 *    0.8
 *          Adding temperature feature
 *          Adding Low-Pass filter
@@ -55,7 +60,7 @@
 *****************************************************************
 */
 // Current Firmware Version
-#define FIRMWARE_VERSION          (0x08)
+#define FIRMWARE_VERSION          (0x09)
 // I2C Address
 // this address should change to use more than one a2Spark device
 // address = [0x03 : 0x77]
@@ -101,11 +106,11 @@
 #define ALO                   (0x01<<1)
 #define ALME                  (0x01<<4)
 #define ALM                   (0x07<<5)
-#define ALM_INV               (0x01<<5)
-#define ALM_FE                (0x01<<6)
-#define ALM_RE                (0x01<<7)
+#define ALM_INV               (0x01<<7)
+#define ALM_FE                (0x01<<5)
+#define ALM_RE                (0x01<<6)
 #define ALM_DE                (ALM_RE | ALM_FE)
-#define ALM_L                 (0x03<<6)
+#define ALM_L                 (0x03<<5)
 // Alarm Set Value Register
 #define AL1SVL                (0x09)
 #define AL2SVL                (0x19)
@@ -151,7 +156,7 @@
 #define LPF1R_DEF             (0x0F)
 #define AN1DRL_DEF            (0x00)
 #define AN1DRH_DEF            (0x00)
-#define AL1CR_DEF             (ALEN | ALME | ALM_RE | ALM_INV)
+#define AL1CR_DEF             (ALEN | ALME | ALM_FE | ALM_INV)
 #define AL1SVL_DEF            (0xBC)
 #define AL1SVH_DEF            (0x02)
 #define AL1CVL_DEF            (0x20)
@@ -800,7 +805,6 @@ void checkAlarm(uint8_t al)
   // check if alarm is enabled
   if( !(i2cRegs[tmpRegCR] & ALEN) )
   {
-    alarmOutput[al] = 0;
     goto checkAlarm_updateALO;
   }
   
@@ -863,16 +867,23 @@ void updateAlarm(uint8_t al)
   // get alarm mode config
   tmpMode = (i2cRegs[tmpRegCR] & ALM);
   
-  // check if alarm is enabled and alarm mode enable
-  if( !(i2cRegs[tmpRegCR] & ALEN) || !(i2cRegs[tmpRegCR] & ALME) )
+  // check if alarm is enabled
+  if( !(i2cRegs[tmpRegCR] & ALEN) )
   {
+    // freeze current alarm output
+    return;
+  }
+  // check if alarm mode is enabled
+  else if( !(i2cRegs[tmpRegCR] & ALME) )
+  {
+    // disable output
     tmpAlarm = 0;
   }
   // alarm mode enable
   else
   {
     // level mode
-    if(!(tmpMode & ALM_L)) // ALM7:6={0,0}
+    if(!(tmpMode & ALM_L)) // ALM6:5={0,0}
     {
       tmpAlarm = alarmOutput[al];
     }
