@@ -1,9 +1,15 @@
 /*
-// I2C
-arduino pin 0 = not(OC1A) = PORTB <- _BV(0) = SOIC pin 5 (I2C SDA, PWM)
-arduino pin 2 =           = PORTB <- _BV(2) = SOIC pin 7 (I2C SCL, Analog 1)
- */
-#define FIRMWARE_VERSION  0x01
+Hardware connections
+  P0: I2C SDA
+  P1: AL1
+  P2: I2C SCK
+  P3: AL2
+  P4: AN2
+  P5: AN1
+*/
+
+#define FIRMWARE_VERSION    (0x04)
+#define I2C_ADDRESS_DEVICE  (0x42)
 
 #include <TinyWireS.h>
 
@@ -59,10 +65,10 @@ arduino pin 2 =           = PORTB <- _BV(2) = SOIC pin 7 (I2C SCL, Analog 1)
 
 //Default Values
 #define RESERVED    (0x00)
-#define ADDR_DEF    (0x42)
+#define ADDR_DEF    (I2C_ADDRESS_DEVICE)
 #define FWVR_DEF    (FIRMWARE_VERSION)
 
-#define AN1CR_DEF   (ANEN | AVEN)
+#define AN1CR_DEF   (ANEN)
 #define AVG1R_DEF   (0x00)
 #define AN1DRL_DEF  (0x00)
 #define AN1DRH_DEF  (0x00)
@@ -355,13 +361,13 @@ void checkAlarm(uint8_t al)
   // check the alarm status
   if(setValue > clearValue)
   {
-    if(!alarmOutput[al])  alarmOutput[al] = (analogVal[al] > setValue) ? 1:0;
-    else                  alarmOutput[al] = (analogVal[al] < clearValue) ? 0:1;
+    if(analogVal[al] > setValue)         alarmOutput[al] = 1;
+    else if(analogVal[al] < clearValue)  alarmOutput[al] = 0;
   }
   else
   {
-    if(!alarmOutput[al])  alarmOutput[al] = (analogVal[al] < setValue) ? 1:0;
-    else                  alarmOutput[al] = (analogVal[al] > clearValue) ? 0:1;
+    if(analogVal[al] < setValue)         alarmOutput[al] = 1;
+    else if(analogVal[al] > clearValue)  alarmOutput[al] = 0;
   }
   
   // get the right alarm config reg
@@ -370,8 +376,8 @@ void checkAlarm(uint8_t al)
   
   // update ALnCR.ALO bit
   checkAlarm_updateALO:
-  if(!alarmOutput[al]) i2cRegs[tmpReg] &= ~ALO;
-  else                 i2cRegs[tmpReg] |= ALO;
+  if(alarmOutput[al]==0) i2cRegs[tmpReg] &= ~ALO;
+  else                   i2cRegs[tmpReg] |= ALO;
 }
 
 void updateAlarm(uint8_t al)
