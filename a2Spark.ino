@@ -8,7 +8,7 @@ Hardware connections
   P5: AN1
 */
 
-#define FIRMWARE_VERSION    (0x04)
+#define FIRMWARE_VERSION    (0x05)
 #define I2C_ADDRESS_DEVICE  (0x42)
 
 #include <TinyWireS.h>
@@ -29,7 +29,7 @@ Hardware connections
 //Average Analog Reg
 #define AVG1R       (0x05)
 #define AVG2R       (0x15)
-#define AG          (0x0F<<0)
+#define AG          (0xFF<<0)
 //Analog Data Reg
 #define AN1DRL      (0x06)
 #define AN2DRL      (0x16)
@@ -62,6 +62,14 @@ Hardware connections
 #define AL2CVH      (0x1C)
 #define ALC_L       (0xFF<<0)
 #define ALC_H       (0x03<<0)
+//Temperature Regs
+#define TCR         (0x10)
+#define TEN         (0x01<<0)
+#define C_FS        (0x01<<1)
+#define TDRL        (0x11)
+#define TDRH        (0x12)
+#define TP_L        (0xFF<<0)
+#define TP_H        (0x03<<0)
 
 //Default Values
 #define RESERVED    (0x00)
@@ -78,6 +86,10 @@ Hardware connections
 #define AL1CVL_DEF  (0x00)
 #define AL1CVH_DEF  (0x00)
 
+#define TCR_DEF     (TEN)
+#define TDRL_DEF    (0x00)
+#define TDRH_DEF    (0x00)
+
 #define AN2CR_DEF   (0x00)
 #define AVG2R_DEF   (AVG1R_DEF)
 #define AN2DRL_DEF  (AN1DRL_DEF)
@@ -89,11 +101,13 @@ Hardware connections
 #define AL2CVH_DEF  (AL1CVH_DEF)
 
 #define ANALOG_INPUT      (2)
-#define ANALOG_BUFF_SIZE  (16)
+#define ANALOG_BUFF_SIZE  (256)
 #define ANALOG_AN1_ADC    (0)
 #define ANALOG_AN2_ADC    (2)
 #define ALARM_AL1_PIN     (1)
 #define ALARM_AL2_PIN     (3)
+
+#define TEMPERATURE_BUFF_SIZE (20)
 
 #define SELECT_CHECK(__n__)  \
         ((__n__ >= 0) && (__n__ < ANALOG_INPUT))
@@ -103,6 +117,12 @@ uint16_t analogAcc[ANALOG_INPUT];
 uint8_t  analogIndex[ANALOG_INPUT];
 uint8_t  analogBuffSize[ANALOG_INPUT];
 uint16_t analogBuff[ANALOG_INPUT][ANALOG_BUFF_SIZE];
+
+int16_t temperatureVal;  //the temperature value is signed
+uint16_t temperatureAcc;
+uint8_t  temperatureIndex;
+uint8_t  temperatureBuffSize;
+uint16_t temperatureBuff[TEMPERATURE_BUFF_SIZE];
 
 uint8_t  alarmOutput[ANALOG_INPUT];
 
@@ -126,9 +146,9 @@ volatile uint8_t i2cRegs[] =
   RESERVED,      //0x0D
   RESERVED,      //0x0E
   RESERVED,      //0x0F
-  RESERVED,      //0x10
-  RESERVED,      //0x11
-  RESERVED,      //0x12
+  TCR_DEF,       //0x10
+  TDRL_DEF,      //0x11
+  TDRH_DEF,      //0x12
   RESERVED,      //0x13
   AN2CR_DEF,     //0x14
   AVG2R_DEF,     //0x15
@@ -244,6 +264,25 @@ void initAlarm(uint8_t al)
   pinMode(tmpReg, OUTPUT);
 }
 
+void initTemperature()
+{
+  int j;
+  
+  temperatureVal      = 0;
+  temperatureAcc      = 0;
+  temperatureIndex    = 0;
+  temperatureBuffSize = TEMPERATURE_BUFF_SIZE;
+  
+  if(i2cRegs[TCR] & TEN)
+  {
+    // init the temperature buffer
+    for(j=0; j<temperatureBuffSize; j++)
+    {
+      readTemperature();
+    }
+  } 
+}
+
 void readSensor(uint8_t an)
 {
   uint8_t i;
@@ -327,6 +366,9 @@ void updateRegs()
   i2cRegs[AL2CVL] &= ALC_L;
   i2cRegs[AL1CVH] &= ALC_H;
   i2cRegs[AL2CVH] &= ALC_H;
+  i2cRegs[TCR]    &= (TEN | C_FS);
+  i2cRegs[TDRL]   &= TP_L;
+  i2cRegs[TDRH]   &= TP_H;
 }
 
 void checkAlarm(uint8_t al)
@@ -395,7 +437,7 @@ void updateAlarm(uint8_t al)
   else if(al == 1)  tmpReg = AL2CR;
   
   // get alarm mode
-  tmpMode = i2cRegs[tmpReg] & ALM;
+  tmpMode = (i2cRegs[tmpReg] & ALM) >> 2;
   
   // check if alarm is enabled and mode valid
   if( !(i2cRegs[tmpReg] & ALEN) || (tmpMode==0x0) )
@@ -416,14 +458,16 @@ void updateAlarm(uint8_t al)
   {
     if(outputState[al] != alarmOutput[al])
     {
-      if(tmpMode == ALM_FE || tmpMode == ALM_DE)
+      // falling edge
+      if(outputState[al] && !alarmOutput[al])
       {
-        if(outputState[al] && !alarmOutput[al])    tmpAlarm = 1;
+        if(tmpMode == ALM_FE || tmpMode == ALM_DE) tmpAlarm = 1;
         else tmpAlarm = 0;
       }
-      if(tmpMode == ALM_RE || tmpMode == ALM_DE)
+      // raising edge
+      else
       {
-        if(!outputState[al] && alarmOutput[al])    tmpAlarm = 1;
+        if(tmpMode == ALM_RE || tmpMode == ALM_DE)  tmpAlarm = 1;
         else tmpAlarm = 0;
       }
     }
@@ -439,10 +483,52 @@ void updateAlarm(uint8_t al)
   digitalWrite(tmpReg, tmpAlarm);
 }
 
+void readTemperature()
+{
+  // check if temperature is enabled
+  if(!(i2cRegs[TCR] & TEN))  return;
+  
+  // change the default analog reference for internal temperature
+  // this reference is reset to default after an analogRead()
+  analogReference(INTERNAL1V1);
+  // smooth the kelvin temperature value
+  temperatureAcc -= temperatureBuff[temperatureIndex];
+  temperatureBuff[temperatureIndex] = analogRead(A0+15);
+  temperatureAcc += temperatureBuff[temperatureIndex];
+  temperatureIndex ++;
+  if (temperatureIndex >= temperatureBuffSize)  temperatureIndex = 0;
+  temperatureVal = temperatureAcc/temperatureBuffSize;
+  // convert kelvin to celsius
+  // (simplification of calculation)
+  // C = K - 273.15
+  // C = K - 273
+  if(!(i2cRegs[TCR] & C_FS))
+  {
+    temperatureVal -= 273;
+  }
+  // convert kelvin to fahrenheit
+  // (simplification of calculation)
+  // F = 9/5*K - 459.67
+  // F = (9*K - 5*459.67)/5
+  // F = (9*K - 2298.35)/5
+  // F = (9*K - 2298)/5
+  else
+  {
+    temperatureVal *= 9;
+    temperatureVal -= 2298;
+    temperatureVal /= 5;
+  }
+  
+  // set the temperature data reg with the new value
+  i2cRegs[0x10] = temperatureVal & 0xFF;
+  i2cRegs[0x11] = (temperatureVal >> 8) & 0x03;
+}
+
 void setup()
 {
   uint8_t i;
   updateRegs();
+  initTemperature();
   for(i=0; i<ANALOG_INPUT; i++)
   {
     initSensor(i);
@@ -457,6 +543,7 @@ void loop()
 {
   static uint8_t i;
   updateRegs();
+  readTemperature();
   for(i=0; i<ANALOG_INPUT; i++)
   {
     readSensor(i);
