@@ -1,11 +1,4 @@
-/**
- * Pin notes by Suovula, see also http://hlt.media.mit.edu/?p=1229
- *
- * DIP and SOIC have same pinout, however the SOIC chips are much cheaper, especially if you buy more than 5 at a time
- * For nice breakout boards see https://github.com/rambo/attiny_boards
- *
- * Basically the arduino pin numbers map directly to the PORTB bit numbers.
- *
+/*
 // I2C
 arduino pin 0 = not(OC1A) = PORTB <- _BV(0) = SOIC pin 5 (I2C SDA, PWM)
 arduino pin 2 =           = PORTB <- _BV(2) = SOIC pin 7 (I2C SCL, Analog 1)
@@ -50,17 +43,17 @@ arduino pin 2 =           = PORTB <- _BV(2) = SOIC pin 7 (I2C SCL, Analog 1)
 #define ALM_LL      (0x01<<2)
 #define ALM_HL      (0x05<<0)
 //Alarm Set Value Reg
-#define AL1SRL      (0x09)
-#define AL2SRL      (0x19)
-#define AL1SRH      (0x0A)
-#define AL2SRH      (0x1A)
+#define AL1SVL      (0x09)
+#define AL2SVL      (0x19)
+#define AL1SVH      (0x0A)
+#define AL2SVH      (0x1A)
 #define ALS_L       (0xFF<<0)
 #define ALS_H       (0x03<<0)
 //Alarm Clear Value Reg
-#define AL1CRL      (0x0B)
-#define AL2CRL      (0x1B)
-#define AL1CRH      (0x0C)
-#define AL2CRH      (0x1C)
+#define AL1CVL      (0x0B)
+#define AL2CVL      (0x1B)
+#define AL1CVH      (0x0C)
+#define AL2CVH      (0x1C)
 #define ALC_L       (0xFF<<0)
 #define ALC_H       (0x03<<0)
 
@@ -74,30 +67,38 @@ arduino pin 2 =           = PORTB <- _BV(2) = SOIC pin 7 (I2C SCL, Analog 1)
 #define AN1DRL_DEF  (0x00)
 #define AN1DRH_DEF  (0x00)
 #define AL1CR_DEF   (0x00)
-#define AL1SRL_DEF  (0x00)
-#define AL1SRH_DEF  (0x00)
-#define AL1CRL_DEF  (0x00)
-#define AL1CRH_DEF  (0x00)
+#define AL1SVL_DEF  (0x00)
+#define AL1SVH_DEF  (0x00)
+#define AL1CVL_DEF  (0x00)
+#define AL1CVH_DEF  (0x00)
 
 #define AN2CR_DEF   (0x00)
 #define AVG2R_DEF   (AVG1R_DEF)
 #define AN2DRL_DEF  (AN1DRL_DEF)
 #define AN2DRH_DEF  (AN1DRH_DEF)
 #define AL2CR_DEF   (AL1CR_DEF)
-#define AL2SRL_DEF  (AL1SRL_DEF)
-#define AL2SRH_DEF  (AL1SRH_DEF)
-#define AL2CRL_DEF  (AL1CRL_DEF)
-#define AL2CRH_DEF  (AL1CRH_DEF)
+#define AL2SVL_DEF  (AL1SVL_DEF)
+#define AL2SVH_DEF  (AL1SVH_DEF)
+#define AL2CVL_DEF  (AL1CVL_DEF)
+#define AL2CVH_DEF  (AL1CVH_DEF)
 
+#define ANALOG_INPUT      (2)
+#define ANALOG_BUFF_SIZE  (16)
+#define ANALOG_AN1_ADC    (0)
+#define ANALOG_AN2_ADC    (2)
+#define ALARM_AL1_PIN     (1)
+#define ALARM_AL2_PIN     (3)
 
+#define SELECT_CHECK(__n__)  \
+        ((__n__ >= 0) && (__n__ < ANALOG_INPUT))
+        
+uint16_t analogVal[ANALOG_INPUT];
+uint16_t analogAcc[ANALOG_INPUT];
+uint8_t  analogIndex[ANALOG_INPUT];
+uint8_t  analogBuffSize[ANALOG_INPUT];
+uint16_t analogBuff[ANALOG_INPUT][ANALOG_BUFF_SIZE];
 
-#define ANALOG_BUFF_SIZE  16
-uint8_t  analogPin;
-uint16_t analogVal;
-uint16_t analogAcc;
-uint8_t  analogIndex;
-uint8_t  analogBuffSize;
-uint16_t analogBuff[ANALOG_BUFF_SIZE];
+uint8_t  alarmOutput[ANALOG_INPUT];
 
 // Tracks the current register pointer position
 volatile byte reg_position;
@@ -112,10 +113,10 @@ volatile uint8_t i2cRegs[] =
   AN1DRL_DEF,    //0x06
   AN1DRH_DEF,    //0x07
   AL1CR_DEF,     //0x08
-  AL1SRL_DEF,    //0x09
-  AL1SRH_DEF,    //0x0A
-  AL1CRL_DEF,    //0x0B
-  AL1CRH_DEF,    //0x0C
+  AL1SVL_DEF,    //0x09
+  AL1SVH_DEF,    //0x0A
+  AL1CVL_DEF,    //0x0B
+  AL1CVH_DEF,    //0x0C
   RESERVED,      //0x0D
   RESERVED,      //0x0E
   RESERVED,      //0x0F
@@ -128,10 +129,10 @@ volatile uint8_t i2cRegs[] =
   AN2DRL_DEF,    //0x16
   AN2DRH_DEF,    //0x17
   AL2CR_DEF,     //0x18
-  AL2SRL_DEF,    //0x19
-  AL2SRH_DEF,    //0x1A
-  AL2CRL_DEF,    //0x1B
-  AL2CRH_DEF,    //0x1C
+  AL2SVL_DEF,    //0x19
+  AL2SVH_DEF,    //0x1A
+  AL2CVL_DEF,    //0x1B
+  AL2CVH_DEF,    //0x1C
   RESERVED,      //0x1D
   RESERVED,      //0x1E
   RESERVED       //0x1F
@@ -182,86 +183,265 @@ void receiveEvent(uint8_t howMany)
     }
 }
 
-void initSensor()
+void initSensor(uint8_t an)
 {
-  int i;
-  analogPin      = 0;
-  analogVal      = 0;
-  analogAcc      = 0;
-  analogIndex    = 0;
-  analogBuffSize = (i2cRegs[AVG1R] & AG) + 1;
-  for(i=0; i<ANALOG_BUFF_SIZE; i++)
+  int j;
+  uint8_t tmpReg;
+
+  // check if 'an' is between 0 and ANALOG_INPUT-1
+  if(!SELECT_CHECK(an))  return;
+  
+  // get the right average analog reg
+  if(an == 0)       tmpReg = AVG1R;
+  else if(an == 1)  tmpReg = AVG2R;
+  
+  // init analog variables
+  analogVal[an]      = 0;
+  analogAcc[an]      = 0;
+  analogIndex[an]    = 0;
+  analogBuffSize[an] = (i2cRegs[tmpReg] & AG) + 1;
+  
+  // init the analog buff
+  for(j=0; j<ANALOG_BUFF_SIZE; j++)
   {
-    analogBuff[i] = 0;
+    analogBuff[an][j] = 0;
   }
-  for(i=0; i<analogBuffSize; i++)
+  
+  // get the right analog config reg
+  if(an == 0)       tmpReg = AN1CR;
+  else if(an == 1)  tmpReg = AN2CR;
+  if(i2cRegs[tmpReg] & AVEN)
   {
-    readSensor();
-  }
+    // init the analog averaging
+    for(j=0; j<analogBuffSize[an]; j++)
+    {
+      readSensor(an);
+    }
+  } 
 }
 
-void readSensor()
+void initAlarm(uint8_t al)
+{
+  uint8_t tmpReg;
+  
+  // check if 'al' is between 0 and ANALOG_INPUT-1
+  if(!SELECT_CHECK(al))  return;
+  
+  alarmOutput[al] = 0;
+  checkAlarm(al);
+  updateAlarm(al);
+  
+  // get the right alarm output pin
+  if(al == 0)       tmpReg = ALARM_AL1_PIN;
+  else if(al == 1)  tmpReg = ALARM_AL2_PIN;
+  // set the alarm pin in output status
+  pinMode(tmpReg, OUTPUT);
+}
+
+void readSensor(uint8_t an)
 {
   uint8_t i;
-  uint8_t tmpBuffSize = analogBuffSize;
+  uint8_t tmpBuffSize;
+  uint8_t tmpReg;
+  
+  // check if 'an' is between 0 and ANALOG_INPUT-1
+  if(!SELECT_CHECK(an))  return;
+  
+  // get the right analog config reg
+  if(an == 0)       tmpReg = AN1CR;
+  else if(an == 1)  tmpReg = AN2CR;
+  
   // check if sampling is enabled
-  if( !(i2cRegs[AN1CR] & ANEN) )  return;
+  if( !(i2cRegs[tmpReg] & ANEN) )  return;
+  
   // check if averaging is enabled
-  if( !(i2cRegs[AN1CR] & AVEN) )
+  if( !(i2cRegs[tmpReg] & AVEN) )
   {
+    // get the right analog input
+    if(an == 0)       tmpReg = ANALOG_AN1_ADC;
+    else if(an == 1)  tmpReg = ANALOG_AN2_ADC;
     // averging disabled then just capture one sample
-    analogVal = analogRead(0);
+    analogVal[an] = analogRead(tmpReg);
   }
   else
   {
-    // read the AVGR register because averaging enabled
-    analogBuffSize = (i2cRegs[AVG1R] & AG) + 1;
+    // get the right average analog reg
+    if(an == 0)       tmpReg = AVG1R;
+    else if(an == 1)  tmpReg = AVG2R;
+    // save the last buffer size
+    tmpBuffSize = analogBuffSize[an];
+    // read the AVGnR register because averaging enabled
+    analogBuffSize[an] = (i2cRegs[tmpReg] & AG) + 1;
+    // get the right analog input
+    if(an == 0)       tmpReg = ANALOG_AN1_ADC;
+    else if(an == 1)  tmpReg = ANALOG_AN2_ADC;
     // load the buffer with relevant values when the size is increased
-    if(analogBuffSize > tmpBuffSize)
+    if(analogBuffSize[an] > tmpBuffSize)
     {
-      for(i=0; i<analogBuffSize-tmpBuffSize; i++)
-        analogBuff[tmpBuffSize+i] = analogRead(analogPin);
+      for(i=0; i<analogBuffSize[an]-tmpBuffSize; i++)
+        analogBuff[an][tmpBuffSize+i] = analogRead(tmpReg);
     }
     // smooth the analog value
-    analogAcc = analogAcc - analogBuff[analogIndex];
-    analogBuff[analogIndex] = analogRead(analogPin);
-    analogAcc = analogAcc + analogBuff[analogIndex];
-    analogIndex ++;
-    if (analogIndex >= analogBuffSize)  analogIndex = 0;
-    analogVal = analogAcc/analogBuffSize;
+    analogAcc[an] = analogAcc[an] - analogBuff[an][analogIndex[an]];
+    analogBuff[an][analogIndex[an]] = analogRead(tmpReg);
+    analogAcc[an] = analogAcc[an] + analogBuff[an][analogIndex[an]];
+    analogIndex[an] ++;
+    if (analogIndex[an] >= analogBuffSize[an])  analogIndex[an] = 0;
+    analogVal[an] = analogAcc[an]/analogBuffSize[an];
   }
   
-  i2cRegs[AN1DRL] = analogVal & AN_L;
-  i2cRegs[AN1DRH] = (analogVal >> 8) & AN_H;
+  // get the right analog data reg
+  if(an == 0)       tmpReg = AN1DRL;
+  else if(an == 1)  tmpReg = AN2DRL;
+  
+  // set the analog data reg with the new value
+  i2cRegs[tmpReg]   = analogVal[an] & AN_L;
+  i2cRegs[tmpReg+1] = (analogVal[an] >> 8) & AN_H;
 }
 
 void updateRegs()
 {
+  i2cRegs[ADDR]    = ADDR_DEF;
+  i2cRegs[FWVR]    = FWVR_DEF;
   i2cRegs[AN1CR]  &= (ANEN | AVEN);
+  i2cRegs[AN2CR]  &= (ANEN | AVEN);
   i2cRegs[AVG1R]  &= AG;
+  i2cRegs[AVG2R]  &= AG;
   i2cRegs[AN1DRL] &= AN_L;
+  i2cRegs[AN2DRL] &= AN_L;
   i2cRegs[AN1DRH] &= AN_H;
+  i2cRegs[AN2DRH] &= AN_H;
+  i2cRegs[AL1CR]  &= (ALEN | ALO | ALM);
+  i2cRegs[AL2CR]  &= (ALEN | ALO | ALM);
+  i2cRegs[AL1SVL] &= ALS_L;
+  i2cRegs[AL2SVL] &= ALS_L;
+  i2cRegs[AL1SVH] &= ALS_H;
+  i2cRegs[AL2SVH] &= ALS_H;
+  i2cRegs[AL1CVL] &= ALC_L;
+  i2cRegs[AL2CVL] &= ALC_L;
+  i2cRegs[AL1CVH] &= ALC_H;
+  i2cRegs[AL2CVH] &= ALC_H;
 }
 
-int checkAlarm(int value, int alarm, int setValue, int clearValue)
+void checkAlarm(uint8_t al)
 {
+  uint8_t tmpReg;
+  uint16_t setValue;
+  uint16_t clearValue;
+  
+  // check if 'al' is between 0 and ANALOG_INPUT-1
+  if(!SELECT_CHECK(al))  return;
+  
+  // get the right alarm config reg
+  if(al == 0)       tmpReg = AL1CR;
+  else if(al == 1)  tmpReg = AL2CR;
+  // check if alarm is enabled
+  if( !(i2cRegs[tmpReg] & ALEN) )
+  {
+    alarmOutput[al] = 0;
+    goto checkAlarm_updateALO;
+  }
+  
+  // get the right alarm set value reg
+  if(al == 0)       tmpReg = AL1SVL;
+  else if(al == 1)  tmpReg = AL2SVL;
+  setValue = ( (i2cRegs[tmpReg] & ALS_L) | ((i2cRegs[tmpReg+1] & ALS_H) << 8) );
+  
+  // get the right alarm clear value reg
+  if(al == 0)       tmpReg = AL1CVL;
+  else if(al == 1)  tmpReg = AL2CVL;
+  clearValue = ( (i2cRegs[tmpReg] & ALC_L) | ((i2cRegs[tmpReg+1] & ALC_H) << 8) );
+  
+  // check the alarm status
   if(setValue > clearValue)
   {
-    if(!alarm)  alarm = (value > setValue) ? 1:0;
-    else        alarm = (value < clearValue) ? 0:1;
+    if(!alarmOutput[al])  alarmOutput[al] = (analogVal[al] > setValue) ? 1:0;
+    else                  alarmOutput[al] = (analogVal[al] < clearValue) ? 0:1;
   }
   else
   {
-    if(!alarm)  alarm = (value < setValue) ? 1:0;
-    else        alarm = (value > clearValue) ? 0:1;
+    if(!alarmOutput[al])  alarmOutput[al] = (analogVal[al] < setValue) ? 1:0;
+    else                  alarmOutput[al] = (analogVal[al] > clearValue) ? 0:1;
   }
-  return alarm;
+  
+  // get the right alarm config reg
+  if(al == 0)       tmpReg = AL1CR;
+  else if(al == 1)  tmpReg = AL2CR;
+  
+  // update ALnCR.ALO bit
+  checkAlarm_updateALO:
+  if(!alarmOutput[al]) i2cRegs[tmpReg] &= ~ALO;
+  else                 i2cRegs[tmpReg] |= ALO;
+}
+
+void updateAlarm(uint8_t al)
+{
+  uint8_t tmpReg;
+  uint8_t tmpMode;
+  uint8_t tmpAlarm;
+  static uint8_t outputState[ANALOG_INPUT];
+  
+  // check if 'al' is between 0 and ANALOG_INPUT-1
+  if(!SELECT_CHECK(al))  return;
+  
+  // get the right alarm config reg
+  if(al == 0)       tmpReg = AL1CR;
+  else if(al == 1)  tmpReg = AL2CR;
+  
+  // get alarm mode
+  tmpMode = i2cRegs[tmpReg] & ALM;
+  
+  // check if alarm is enabled and mode valid
+  if( !(i2cRegs[tmpReg] & ALEN) || (tmpMode==0x0) )
+  {
+    tmpAlarm = 0;
+  }
+  // level mode
+  else if(tmpMode & ALM_LL)  // check ALM2
+  {
+    // mask to keep ALM2 and ALM0 only
+    tmpMode &= ALM_HL;
+    if(tmpMode == ALM_LL)       tmpAlarm = !alarmOutput[al];
+    else if(tmpMode == ALM_HL)  tmpAlarm = alarmOutput[al];
+    else                        tmpAlarm = 0;
+  }
+  // pulse mode
+  else
+  {
+    if(outputState[al] != alarmOutput[al])
+    {
+      if(tmpMode == ALM_FE || tmpMode == ALM_DE)
+      {
+        if(outputState[al] && !alarmOutput[al])    tmpAlarm = 1;
+        else tmpAlarm = 0;
+      }
+      if(tmpMode == ALM_RE || tmpMode == ALM_DE)
+      {
+        if(!outputState[al] && alarmOutput[al])    tmpAlarm = 1;
+        else tmpAlarm = 0;
+      }
+    }
+    else tmpAlarm = 0;
+  }
+  
+  // save the current alarm state
+  outputState[al] = alarmOutput[al];
+  // get the right alarm ouput pin
+  if(al == 0)       tmpReg = ALARM_AL1_PIN;
+  else if(al == 1)  tmpReg = ALARM_AL2_PIN;
+  // update the output
+  digitalWrite(tmpReg, tmpAlarm);
 }
 
 void setup()
 {
+  uint8_t i;
   updateRegs();
-  initSensor();
+  for(i=0; i<ANALOG_INPUT; i++)
+  {
+    initSensor(i);
+    initAlarm(i);
+  }
   TinyWireS.begin(i2cRegs[ADDR]);
   TinyWireS.onReceive(receiveEvent);
   TinyWireS.onRequest(requestEvent);
@@ -269,7 +449,13 @@ void setup()
 
 void loop()
 {
+  static uint8_t i;
   updateRegs();
-  readSensor();
+  for(i=0; i<ANALOG_INPUT; i++)
+  {
+    readSensor(i);
+    checkAlarm(i);
+    updateAlarm(i);
+  }
   TinyWireS_stop_check();
 }
