@@ -2,8 +2,8 @@
 *  Name:      a2Spark
 *  Author:    Alexandre Boni
 *  Created:   2013/10/26
-*  Modified:  2014/04/20
-*  Version:   0.9
+*  Modified:  2014/06/05
+*  Version:   1.0
 *  IDE:       Arduino 1.0.4 Digispark
 *  Hardware:  Digispark (ATtiny85)
 *
@@ -15,6 +15,10 @@
 *            P5: AN1
 *
 *  Release:
+*    1.0
+*          Set the default configuration for 
+*          the RaspLapse project.
+*          
 *    0.9
 *          Freeze current alarm output status
 *          when alarm is disbaled, and reset
@@ -60,7 +64,7 @@
 *****************************************************************
 */
 // Current Firmware Version
-#define FIRMWARE_VERSION          (0x09)
+#define FIRMWARE_VERSION          (0x10)
 // I2C Address
 // this address should change to use more than one a2Spark device
 // address = [0x03 : 0x77]
@@ -168,8 +172,8 @@
 #define TDRL_DEF              (0x00)
 #define TDRH_DEF              (0x00)
 // Analog1 & Alarm2 Registers
-#define AN2CR_DEF             (0x00)
-#define LPF2R_DEF             (0x00)
+#define AN2CR_DEF             (ANEN | LPEN)
+#define LPF2R_DEF             (0x08)
 #define AN2DRL_DEF            (0x00)
 #define AN2DRH_DEF            (0x00)
 #define AL2CR_DEF             (0x00)
