@@ -24,6 +24,6 @@ a2Spark
  Soon on eklex.cc
 
 # <a name="docs"></a>Documents
- [Datasheet](https://github.com/eklex/a2Spark/blob/master/Docs/a2Spark Datasheet.pdf) release 1.2
- [Registers](https://github.com/eklex/a2Spark/blob/master/Docs/a2Spark Registers.pdf)
+ *[Datasheet](https://github.com/eklex/a2Spark/blob/master/Docs/a2Spark Datasheet.pdf) release 1.2
+ *[Registers](https://github.com/eklex/a2Spark/blob/master/Docs/a2Spark Registers.pdf)
  
